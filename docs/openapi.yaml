@@ -1,0 +1,382 @@
+openapi: 3.1.0
+info:
+  title: ConcertMax Chatbot API
+  version: 1.0.0
+  description: API backend pour le chatbot spectateurs de ConcertMax
+
+servers:
+  - url: https://localhost:8000/v1/api
+    description: Développement local
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    LoginRequest:
+      type: object
+      required:
+        - mail
+        - motdepasse
+      properties:
+        mail:
+          type: string
+          format: email
+          example: jean.dupont@mail.com
+        motdepasse:
+          type: string
+          format: password
+          example: motdepasse123
+
+    LoginResponse:
+      type: object
+      properties:
+        nom:
+          type: string
+          example: Dupont
+        prenom:
+          type: string
+          example: Jean
+        token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    MeResponse:
+      type: object
+      properties:
+        nom:
+          type: string
+          example: Dupont
+        prenom:
+          type: string
+          example: Jean
+        mail:
+          type: string
+          format: email
+          example: jean.dupont@mail.com
+
+    ChatRequest:
+      type: object
+      required:
+        - q
+      properties:
+        id_chat:
+          type: string
+          format: uuid
+          nullable: true
+          description: UUID du chat existant. Absent si nouvelle conversation.
+          example: 550e8400-e29b-41d4-a716-446655440000
+        q:
+          type: string
+          description: Question posée par l'utilisateur.
+          example: Quel est le prix d'un chocolat chaud ?
+
+    ChatResponse:
+      type: object
+      properties:
+        id_chat:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        reponse:
+          type: string
+          example: Le chocolat chaud est à 2,50 €.
+
+    Message:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        contenu:
+          type: string
+          example: Quel est le prix d'un chocolat chaud ?
+        timestamp:
+          type: string
+          format: date-time
+
+    ChatHistoryResponse:
+      type: object
+      properties:
+        id_chat:
+          type: string
+          format: uuid
+          example: 550e8400-e29b-41d4-a716-446655440000
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+
+    ContactResponse:
+      type: object
+      properties:
+        tel:
+          type: string
+          example: 01 23 45 67 89
+        adresse:
+          type: string
+          example: 3 Rue des Vieilles Charrues, 57000 Metz
+        mail:
+          type: string
+          format: email
+          example: contact@concertmax.fr
+
+    UploadResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: PDF traité avec succès. 12 produits importés dans la table menu_produit.
+        produits_importes:
+          type: integer
+          example: 12
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 401
+        message:
+          type: string
+          example: Token invalide ou expiré.
+
+paths:
+  /login:
+    post:
+      summary: Authentification utilisateur
+      description: >
+        Authentifie un utilisateur via mail + mot de passe.
+        Retourne le nom, prénom et un JWT à utiliser dans les requêtes sécurisées.
+      tags:
+        - Authentification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Connexion réussie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Identifiants incorrects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Corps de requête invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /upload:
+    post:
+      summary: Upload d'un PDF de menu buvette
+      description: >
+        Permet à un administrateur d'uploader un PDF de menu buvette (25 Mo max).
+        Le PDF est analysé via OCR (Tesseract) et les produits détectés sont
+        insérés dans la table menu_produit (label + prix).
+      tags:
+        - Administration
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - fichier
+              properties:
+                fichier:
+                  type: string
+                  format: binary
+                  description: Fichier PDF du menu buvette (25 Mo max)
+      responses:
+        '200':
+          description: PDF traité et produits importés
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          description: Fichier manquant, format invalide ou taille dépassée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token manquant ou invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Fichier trop volumineux (> 25 Mo)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chat/{id_contexte}:
+    post:
+      summary: Envoyer un message au chatbot
+      description: >
+        Envoie une question au chatbot dans un contexte donné (id_contexte correspond
+        à un prompt prédéfini dans la table prompt).
+        Si id_chat est absent du body, une nouvelle conversation est créée.
+        Si id_chat est fourni, le message est ajouté à la conversation existante.
+        Retourne la réponse de l'IA et l'UUID du chat.
+      tags:
+        - Chat
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id_contexte
+          in: path
+          required: true
+          description: >
+            Identifiant du contexte (lié à la table prompt).
+            Détermine le prompt système appliqué à l'IA.
+          schema:
+            type: integer
+            example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Réponse de l'IA générée avec succès
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Corps de requête invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token manquant ou invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Contexte ou chat introuvable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /chat/{id_chat}:
+    get:
+      summary: Récupérer l'historique d'un chat
+      description: >
+        Retourne l'ensemble des messages (user + assistant) d'une conversation
+        identifiée par son UUID.
+      tags:
+        - Chat
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id_chat
+          in: path
+          required: true
+          description: UUID de la conversation à récupérer
+          schema:
+            type: string
+            format: uuid
+            example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        '200':
+          description: Historique du chat retourné
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatHistoryResponse'
+        '401':
+          description: Token manquant ou invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Chat introuvable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /contacts:
+    get:
+      summary: Récupérer les informations de contact
+      description: >
+        Retourne les coordonnées de la salle (téléphone, adresse, mail)
+        depuis la table contact.
+      tags:
+        - Informations
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Contacts retournés
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContactResponse'
+        '401':
+          description: Token manquant ou invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /me:
+    get:
+      summary: Récupérer le profil de l'utilisateur connecté
+      description: >
+        Retourne nom, prénom et mail de l'utilisateur authentifié,
+        extrait du JWT.
+      tags:
+        - Authentification
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profil utilisateur retourné
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          description: Token manquant ou invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+tags:
+  - name: Authentification
+    description: Connexion et profil utilisateur
+  - name: Administration
+    description: Endpoints réservés aux admins (upload de documents)
+  - name: Chat
+    description: Interaction avec le chatbot IA
+  - name: Informations
+    description: Données statiques de la salle
